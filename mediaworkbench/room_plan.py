@@ -43,14 +43,20 @@ def response(conn, asset_id):
 
 
 def kernels(saved):
+    """Decode the frozen measured matrix as four signed impulse responses.
+
+    The transfer paths are stored in output/input order LL, LR, RL, RR.  Every
+    tap keeps its measured sign (anti-phase reflections stay anti-phase),
+    sample position (reflection order and delay) and interchannel level.
+    """
     raw = base64.b64decode(saved['pcm'], validate=True)
     if len(raw) != saved['frames']*16:
         raise ValueError('damaged room response')
     values = array('f'); values.frombytes(raw)
     if sys.byteorder != 'little':
         values.byteswap()
-    # Signed acoustic transfer amplitudes share one measured calibration.
-    return _compact_matrix(values, saved['frames'])
+    frames = saved['frames']
+    return [[float(values[4*i+channel]) for i in range(frames)] for channel in range(4)]
 
 
 def create(conn, project_id, stages, dry=0.0, wet=1.0):
@@ -87,26 +93,3 @@ def get(conn, identity):
     if row is None or hashlib.sha256(row['payload'].encode()).hexdigest()!=row['payload_sha256']:
         raise ValueError('room plan is missing or damaged')
     return dict(json.loads(row['payload']),id=identity)
-
-
-def _compact_matrix(values, frames):
-    """Prepare compact positive transfer envelopes for block-local audition."""
-    size = 512
-    result = []
-    for channel in range(4):
-        magnitudes = [abs(float(values[4*i+channel])) for i in range(frames)]
-        total = sum(magnitudes)
-        if total == 0:
-            result.append([0.0]*size)
-            continue
-        compact = [0.0]*size
-        for i, value in enumerate(magnitudes):
-            position = min(size-1, i*size//max(frames,1))
-            compact[position] += value/total
-        first = next((i for i,v in enumerate(compact) if v),0)
-        if first:
-            compact = compact[first:]+[0.0]*first
-        if len(compact)!=size:
-            raise ValueError('invalid compact room envelope')
-        result.append(compact)
-    return result

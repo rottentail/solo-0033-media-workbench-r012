@@ -44,8 +44,12 @@ def render(conn, identity, destination, at_sample=0, samples=None, block_frames=
         raw, output = root/'room.f32', root/'room.wav'
         with tempfile.TemporaryFile() as spool, raw.open('wb') as handle:
             selected = programme(conn,plan,spool)
-            cursor = at_sample
-            for pcm in _audition_blocks(spool,plan,at_sample,samples,block_frames):
+            # The convolver always runs the complete frozen programme clock,
+            # including any decay past the programme end; only the requested
+            # slice is written, so every audition equals the full delivery at
+            # the same position.
+            cursor = 0
+            for pcm in room_signal.blocks(spool,plan,block_frames):
                 end = cursor+len(pcm)//2
                 left,right = max(cursor,at_sample),min(end,at_sample+samples)
                 if left<right:
@@ -65,22 +69,3 @@ def render(conn, identity, destination, at_sample=0, samples=None, block_frames=
             os.fsync(handle.fileno())
         os.link(output,target)
     return dict(plan_id=identity,path=str(target),sha256=checksum,samples=samples,rate=48000,channels=2)
-
-
-def _audition_blocks(spool, plan, start, count, block_frames):
-    """Prepare only the requested window, padding the terminal decay on demand."""
-    import copy
-    remaining = count
-    spool.seek(min(start,plan['frames'])*8)
-    local = copy.deepcopy(plan)
-    local['frames'] = min(count,max(0,plan['frames']-start))
-    for stage in local['stages']:
-        stage['at'] = max(0,stage['at']-start)
-    if local['frames']:
-        for pcm in room_signal.blocks(spool,local,block_frames):
-            yield pcm
-            remaining -= len(pcm)//2
-    while remaining>0:
-        frames = min(remaining,block_frames)
-        yield array('f',[0.0])*(frames*2)
-        remaining -= frames
